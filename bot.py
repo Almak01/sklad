@@ -205,4 +205,9 @@ def list_parts(message):
         bot.send_message(message.chat.id, "📭 Склад пуст.")
         return
 
-    text = "📋 Список запчастей
+    text = "📋 Список запчастей:\n\n"
+    for part in parts:
+        part_id, name, quantity = part
+        text += f"🔹 ID {part_id}: {name} - {quantity} шт.\n"
+
+    bot.send_message(message.chat.id, text)

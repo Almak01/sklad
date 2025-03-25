@@ -43,7 +43,8 @@ def start(message):
     add_button = types.KeyboardButton("➕ Добавить запчасть")
     list_button = types.KeyboardButton("📦 Список запчастей")
     take_button = types.KeyboardButton("💼 Списать запчасть")
-    markup.add(add_button, list_button, take_button)
+    issue_button = types.KeyboardButton("🛠 Выдача запчасти")
+    markup.add(add_button, list_button, take_button, issue_button)
 
     bot.send_message(message.chat.id, "Привет! Это бот склада запчастей. \n"
                                       "Выберите одну из опций ниже:", reply_markup=markup)
@@ -123,6 +124,58 @@ def process_taken_by(message, part_id, quantity):
     conn.commit()
 
     bot.send_message(message.chat.id, f"✅ Запчасть списана: {quantity} шт. ({taken_by})")
+
+# 🔹 Обработка нажатия на кнопку "Выдача запчасти"
+@bot.message_handler(func=lambda message: message.text == "🛠 Выдача запчасти")
+def issue_part(message):
+    msg = bot.send_message(message.chat.id, "Введите название запчасти для выдачи:")
+    bot.register_next_step_handler(msg, process_issue_name)
+
+# 🔹 Обработка ввода названия запчасти для выдачи
+def process_issue_name(message):
+    part_name = message.text
+    msg = bot.send_message(message.chat.id, "Введите количество для выдачи:")
+    bot.register_next_step_handler(msg, process_issue_quantity, part_name)
+
+# 🔹 Обработка ввода количества запчасти для выдачи
+def process_issue_quantity(message, part_name):
+    try:
+        quantity = int(message.text)
+        
+        # Проверяем, есть ли такая запчасть на складе
+        cursor.execute("SELECT id, quantity FROM parts WHERE name = ?", (part_name,))
+        part = cursor.fetchone()
+
+        if not part:
+            bot.send_message(message.chat.id, "❌ Запчасть не найдена на складе.")
+            return
+
+        part_id, current_quantity = part
+        if current_quantity < quantity:
+            bot.send_message(message.chat.id, "❌ Недостаточно запчастей на складе.")
+            return
+
+        # Запрашиваем ФИО, кто забрал запчасть
+        msg = bot.send_message(message.chat.id, "Введите ФИО человека, который забрал запчасть:")
+        bot.register_next_step_handler(msg, process_issue_taken_by, part_id, quantity)
+
+    except ValueError:
+        bot.send_message(message.chat.id, "⚠ Ошибка! Введите корректное количество (целое число).")
+
+# 🔹 Обработка ввода ФИО и выдача запчасти
+def process_issue_taken_by(message, part_id, quantity):
+    taken_by = message.text
+
+    # Обновляем количество запчасти на складе
+    cursor.execute("UPDATE parts SET quantity = quantity - ? WHERE id = ?", (quantity, part_id))
+    conn.commit()
+
+    # Сохраняем запись о выдаче
+    cursor.execute("INSERT INTO transactions (part_id, quantity, taken_by, transaction_type) VALUES (?, ?, ?, ?)", 
+                   (part_id, quantity, taken_by, "issue"))
+    conn.commit()
+
+    bot.send_message(message.chat.id, f"✅ Запчасть выдана: {quantity} шт. ({taken_by})")
 
 # 🔹 Обработка нажатия на кнопку "Список запчастей"
 @bot.message_handler(func=lambda message: message.text == "📦 Список запчастей")

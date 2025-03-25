@@ -1,27 +1,27 @@
 import asyncio
 import os
-import logging
 import sqlite3
+import logging
 import pandas as pd
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.filters import Command, Text
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
-# Устанавливаем логирование
+# Настройка логирования (чтобы видеть ошибки)
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота (замени на свой)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Инициализация бота и диспетчера
+# Подключение к боту
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher()
 
-# Создаем базу данных
+# Подключение к базе данных (если нет — создаем)
 conn = sqlite3.connect("parts.db")
 cursor = conn.cursor()
-
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,22 +29,29 @@ CREATE TABLE IF NOT EXISTS parts (
     quantity INTEGER NOT NULL
 )
 """)
-
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS transactions (
+CREATE TABLE IF NOT EXISTS issued_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    part_id INTEGER NOT NULL,
+    part_name TEXT NOT NULL,
     quantity INTEGER NOT NULL,
-    taken_by TEXT NOT NULL,
-    transaction_type TEXT NOT NULL,  -- "add" или "issue"
-    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (part_id) REFERENCES parts(id)
+    issued_to TEXT NOT NULL,
+    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
 conn.commit()
 conn.close()
 
-# 📌 Создаем клавиатуру (не скрывается после нажатия)
+# 📌 Состояния для FSM
+class AddPart(StatesGroup):
+    name = State()
+    quantity = State()
+
+class IssuePart(StatesGroup):
+    number = State()
+    quantity = State()
+    issued_to = State()
+
+# 📌 Главное меню (кнопки)
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📦 Добавить запчасть")],
@@ -52,41 +59,43 @@ main_menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="🔻 Выдача запчасти")],
         [KeyboardButton(text="📊 Отчет")]
     ],
-    resize_keyboard=True,
-    input_field_placeholder="Выберите действие"
+    resize_keyboard=True
 )
 
-
-# 📌 Обработчик команды /start
+# 📌 Команда /start
 @dp.message(Command("start"))
 async def start(message: types.Message):
     await message.answer("🔧 Добро пожаловать! Выберите действие:", reply_markup=main_menu)
 
-# 📌 Добавление запчасти
-@dp.message_handler(lambda message: message.text == "📦 Добавить запчасть")
-async def add_part(message: types.Message):
+# 📌 Добавление запчасти (запуск FSM)
+@dp.message(Text("📦 Добавить запчасть"))
+async def add_part_start(message: types.Message, state: FSMContext):
     await message.answer("Введите название запчасти:")
-    dp.register_message_handler(get_part_name, state="add_part_name")
+    await state.set_state(AddPart.name)
 
-async def get_part_name(message: types.Message):
-    part_name = message.text
-    await message.answer("Введите количество:")
-    dp.register_message_handler(lambda msg: save_part(msg, part_name), state="add_part_quantity")
+@dp.message(AddPart.name)
+async def add_part_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await message.answer("Введите количество запчастей:")
+    await state.set_state(AddPart.quantity)
 
-async def save_part(message: types.Message, part_name):
-    try:
-        quantity = int(message.text)
-        conn = sqlite3.connect("parts.db")
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (part_name, quantity))
-        conn.commit()
-        conn.close()
-        await message.answer(f"✅ Добавлена запчасть: {part_name} (кол-во: {quantity})", reply_markup=main_menu)
-    except ValueError:
-        await message.answer("❌ Введите корректное число.")
+@dp.message(AddPart.quantity)
+async def add_part_quantity(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    part_name = data["name"]
+    quantity = int(message.text)
 
-# 📌 Вывод списка запчастей
-@dp.message_handler(lambda message: message.text == "📋 Список запчастей")
+    conn = sqlite3.connect("parts.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (part_name, quantity))
+    conn.commit()
+    conn.close()
+
+    await message.answer(f"✅ Запчасть '{part_name}' ({quantity} шт.) добавлена!", reply_markup=main_menu)
+    await state.clear()
+
+# 📌 Просмотр списка запчастей
+@dp.message(Text("📋 Список запчастей"))
 async def list_parts(message: types.Message):
     conn = sqlite3.connect("parts.db")
     cursor = conn.cursor()
@@ -102,100 +111,76 @@ async def list_parts(message: types.Message):
             text += f"{part[0]}. {part[1]} — {part[2]} шт.\n"
         await message.answer(text, reply_markup=main_menu)
 
-# 📌 Выдача запчасти
-@dp.message_handler(lambda message: message.text == "🔻 Выдача запчасти")
-async def issue_part(message: types.Message):
+# 📌 Выдача запчасти (запуск FSM)
+@dp.message(Text("🔻 Выдача запчасти"))
+async def issue_part_start(message: types.Message, state: FSMContext):
+    await message.answer("Введите номер запчасти для выдачи:")
+    await state.set_state(IssuePart.number)
+
+@dp.message(IssuePart.number)
+async def issue_part_number(message: types.Message, state: FSMContext):
+    part_id = int(message.text)
+
     conn = sqlite3.connect("parts.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, quantity FROM parts WHERE quantity > 0")
-    parts = cursor.fetchall()
+    cursor.execute("SELECT name, quantity FROM parts WHERE id=?", (part_id,))
+    part = cursor.fetchone()
     conn.close()
 
-    if not parts:
-        await message.answer("📭 Нет доступных запчастей.")
+    if part:
+        await state.update_data(number=part_id, part_name=part[0], available=part[1])
+        await message.answer(f"Введите количество (в наличии {part[1]} шт.):")
+        await state.set_state(IssuePart.quantity)
+    else:
+        await message.answer("❌ Неверный номер запчасти. Попробуйте еще раз.", reply_markup=main_menu)
+        await state.clear()
+
+@dp.message(IssuePart.quantity)
+async def issue_part_quantity(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    quantity = int(message.text)
+
+    if quantity > data["available"]:
+        await message.answer("❌ Недостаточно запчастей на складе.")
         return
 
-    text = "📋 Выберите номер запчасти для выдачи:\n"
-    for part in parts:
-        text += f"{part[0]}. {part[1]} — {part[2]} шт.\n"
+    await state.update_data(quantity=quantity)
+    await message.answer("Введите ФИО получателя:")
+    await state.set_state(IssuePart.issued_to)
 
-    await message.answer(text)
-    dp.register_message_handler(get_issue_part, state="issue_part_id")
+@dp.message(IssuePart.issued_to)
+async def issue_part_to(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    issued_to = message.text
 
-async def get_issue_part(message: types.Message):
-    try:
-        part_id = int(message.text)
-        await message.answer("Введите количество для выдачи:")
-        dp.register_message_handler(lambda msg: get_issue_quantity(msg, part_id), state="issue_quantity")
-    except ValueError:
-        await message.answer("❌ Введите корректный номер запчасти.")
-
-async def get_issue_quantity(message: types.Message, part_id):
-    try:
-        quantity = int(message.text)
-        await message.answer("Введите ФИО получателя:")
-        dp.register_message_handler(lambda msg: confirm_issue(msg, part_id, quantity), state="issue_person")
-    except ValueError:
-        await message.answer("❌ Введите корректное число.")
-
-async def confirm_issue(message: types.Message, part_id, quantity):
-    taken_by = message.text
     conn = sqlite3.connect("parts.db")
     cursor = conn.cursor()
-
-    # Проверяем наличие запчасти
-    cursor.execute("SELECT name, quantity FROM parts WHERE id = ?", (part_id,))
-    part = cursor.fetchone()
-
-    if not part or part[1] < quantity:
-        await message.answer("❌ Недостаточно запчастей на складе.")
-        conn.close()
-        return
-
-    # Обновляем количество
-    new_quantity = part[1] - quantity
-    cursor.execute("UPDATE parts SET quantity = ? WHERE id = ?", (new_quantity, part_id))
-
-    # Записываем транзакцию
-    cursor.execute("INSERT INTO transactions (part_id, quantity, taken_by, transaction_type) VALUES (?, ?, ?, 'issue')",
-                   (part_id, quantity, taken_by))
-
+    cursor.execute("UPDATE parts SET quantity = quantity - ? WHERE id=?", (data["quantity"], data["number"]))
+    cursor.execute("INSERT INTO issued_parts (part_name, quantity, issued_to) VALUES (?, ?, ?)", 
+                   (data["part_name"], data["quantity"], issued_to))
     conn.commit()
     conn.close()
 
-    await message.answer(f"✅ Выдано {quantity} шт. {part[0]} получателю: {taken_by}", reply_markup=main_menu)
+    await message.answer(f"✅ Выдано {data['quantity']} шт. {data['part_name']} — {issued_to}.", reply_markup=main_menu)
+    await state.clear()
 
 # 📌 Отчет в Excel
-@dp.message_handler(lambda message: message.text == "📊 Отчет")
+@dp.message(Text("📊 Отчет"))
 async def generate_report(message: types.Message):
     conn = sqlite3.connect("parts.db")
-    cursor = conn.cursor()
-
-    # Получаем данные за текущий месяц
-    current_month = datetime.now().strftime("%Y-%m")
-    cursor.execute("""
-        SELECT p.name, t.quantity, t.taken_by, t.date
-        FROM transactions t
-        JOIN parts p ON t.part_id = p.id
-        WHERE strftime('%Y-%m', t.date) = ?
-    """, (current_month,))
-    transactions = cursor.fetchall()
+    df = pd.read_sql_query("SELECT part_name, quantity, issued_to, date FROM issued_parts WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now')", conn)
     conn.close()
 
-    if not transactions:
-        await message.answer("📭 За этот месяц выдач не было.")
+    if df.empty:
+        await message.answer("📭 В этом месяце ничего не выдавалось.")
         return
 
-    # Создаем DataFrame и сохраняем в Excel
-    df = pd.DataFrame(transactions, columns=["Название", "Количество", "ФИО", "Дата"])
-    file_path = "report.xlsx"
-    df.to_excel(file_path, index=False)
+    filename = "Отчет_выдачи.xlsx"
+    df.to_excel(filename, index=False)
 
-    # Отправляем отчет
-    with open(file_path, "rb") as report:
-        await bot.send_document(message.chat.id, report, caption="📊 Отчет за текущий месяц")
+    await message.answer_document(types.FSInputFile(filename))
 
-# Запуск бота
+# 📌 Запуск бота (aiogram 3.x)
 async def main():
     await dp.start_polling(bot)
 

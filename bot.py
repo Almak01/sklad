@@ -66,7 +66,7 @@ def process_quantity(message, name):
         quantity = int(message.text)
 
         cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (name, quantity))
-        conn.commit()
+        conn.commit()  # Сохраняем изменения в базе данных
 
         bot.send_message(message.chat.id, f"✅ Добавлена запчасть: {name}, {quantity} шт.")
     except ValueError:
@@ -134,19 +134,19 @@ def process_issue_taken_by(message, part_id, quantity, part_name):
 
     # Обновляем количество запчасти на складе
     cursor.execute("UPDATE parts SET quantity = quantity - ? WHERE id = ?", (quantity, part_id))
-    conn.commit()
+    conn.commit()  # Сохраняем изменения в базе данных
 
     # Сохраняем запись о выдаче
     cursor.execute("INSERT INTO transactions (part_id, quantity, taken_by, transaction_type) VALUES (?, ?, ?, ?)", 
                    (part_id, quantity, taken_by, "issue"))
-    conn.commit()
+    conn.commit()  # Сохраняем изменения в базе данных
 
     bot.send_message(message.chat.id, f"✅ Запчасть выдана: {quantity} шт. ({taken_by})")
 
 # 🔹 Обработка нажатия на кнопку "Список запчастей"
 @bot.message_handler(func=lambda message: message.text == "📦 Список запчастей")
 def list_parts(message):
-    cursor.execute("SELECT name, quantity FROM parts")
+    cursor.execute("SELECT id, name, quantity FROM parts")
     parts = cursor.fetchall()
 
     if not parts:
@@ -154,8 +154,9 @@ def list_parts(message):
         return
 
     text = "📋 Список запчастей:\n\n"
-    for name, quantity in parts:
-        text += f"🔹 {name}: {quantity} шт.\n"
+    for part in parts:
+        part_id, name, quantity = part
+        text += f"🔹 ID {part_id}: {name} - {quantity} шт.\n"
 
     bot.send_message(message.chat.id, text)
 

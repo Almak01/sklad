@@ -1,2 +1,3 @@
 aiogram
 sqlite3
+pyTelegramBotAPI==4.3.1

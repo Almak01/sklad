@@ -1,12 +1,12 @@
-import sqlite3
+import asyncio
 import os
 import logging
+import sqlite3
 import pandas as pd
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils import executor
-from datetime import datetime
-import asyncio
+from aiogram.filters import Command
+from aiogram.fsm.storage.memory import MemoryStorage
 
 # Устанавливаем логирование
 logging.basicConfig(level=logging.INFO)

@@ -46,15 +46,14 @@ conn.close()
 
 # 📌 Создаем клавиатуру (не скрывается после нажатия)
 main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📦 Добавить запчасть")],
+        [KeyboardButton(text="📋 Список запчастей")],
+        [KeyboardButton(text="🔻 Выдача запчасти")],
+        [KeyboardButton(text="📊 Отчет")]
+    ],
     resize_keyboard=True,
-    one_time_keyboard=False,
     input_field_placeholder="Выберите действие"
-)
-main_menu.add(
-    KeyboardButton("📦 Добавить запчасть"),
-    KeyboardButton("📋 Список запчастей"),
-    KeyboardButton("🔻 Выдача запчасти"),
-    KeyboardButton("📊 Отчет")
 )
 
 

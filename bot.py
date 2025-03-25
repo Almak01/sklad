@@ -48,9 +48,8 @@ conn.close()
 main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True,
     one_time_keyboard=False,
-    is_persistent=True
+    input_field_placeholder="Выберите действие"
 )
-
 main_menu.add(
     KeyboardButton("📦 Добавить запчасть"),
     KeyboardButton("📋 Список запчастей"),
@@ -58,8 +57,9 @@ main_menu.add(
     KeyboardButton("📊 Отчет")
 )
 
+
 # 📌 Обработчик команды /start
-@dp.message_handler(commands=["start"])
+@dp.message(Command("start"))
 async def start(message: types.Message):
     await message.answer("🔧 Добро пожаловать! Выберите действие:", reply_markup=main_menu)
 

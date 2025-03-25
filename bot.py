@@ -16,7 +16,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher(storage=MemoryStorage())
 
 # Создаем базу данных
 conn = sqlite3.connect("parts.db")

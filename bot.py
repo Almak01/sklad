@@ -2,6 +2,8 @@ import os
 import telebot
 from telebot import types
 import sqlite3
+import pandas as pd
+from datetime import datetime
 
 # 🔹 Загружаем токен из переменной окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -43,10 +45,60 @@ def start(message):
     add_button = types.KeyboardButton("➕ Добавить запчасть")
     list_button = types.KeyboardButton("📦 Список запчастей")
     issue_button = types.KeyboardButton("🛠 Выдача запчасти")
-    markup.add(add_button, list_button, issue_button)
+    report_button = types.KeyboardButton("📊 Отчет")
+    markup.add(add_button, list_button, issue_button, report_button)
 
     bot.send_message(message.chat.id, "Привет! Это бот склада запчастей. \n"
                                       "Выберите одну из опций ниже:", reply_markup=markup)
+
+# 🔹 Обработка нажатия на кнопку "Отчет"
+@bot.message_handler(func=lambda message: message.text == "📊 Отчет")
+def generate_report(message):
+    # Получаем текущий месяц и год
+    current_month = datetime.now().month
+    current_year = datetime.now().year
+
+    # Запрашиваем данные за текущий месяц
+    cursor.execute("""
+        SELECT p.name, t.quantity, t.taken_by, t.date 
+        FROM transactions t
+        JOIN parts p ON t.part_id = p.id
+        WHERE strftime('%m', t.date) = ? AND strftime('%Y', t.date) = ?
+    """, (str(current_month).zfill(2), str(current_year)))
+    
+    transactions = cursor.fetchall()
+
+    if not transactions:
+        bot.send_message(message.chat.id, "📭 Нет данных для отчета за текущий месяц.")
+        return
+
+    # Создаем DataFrame из полученных данных
+    data = {
+        "Запчасть": [],
+        "Количество": [],
+        "Кто забрал": [],
+        "Дата выдачи": []
+    }
+
+    for transaction in transactions:
+        data["Запчасть"].append(transaction[0])
+        data["Количество"].append(transaction[1])
+        data["Кто забрал"].append(transaction[2])
+        data["Дата выдачи"].append(transaction[3])
+
+    # Создаем DataFrame
+    df = pd.DataFrame(data)
+
+    # Сохраняем в Excel
+    file_name = f"report_{current_year}_{current_month}.xlsx"
+    df.to_excel(file_name, index=False)
+
+    # Отправляем отчет пользователю
+    with open(file_name, 'rb') as file:
+        bot.send_document(message.chat.id, file)
+
+    # Удаляем файл после отправки
+    os.remove(file_name)
 
 # 🔹 Обработка нажатия на кнопку "Добавить запчасть"
 @bot.message_handler(func=lambda message: message.text == "➕ Добавить запчасть")
@@ -153,12 +205,4 @@ def list_parts(message):
         bot.send_message(message.chat.id, "📭 Склад пуст.")
         return
 
-    text = "📋 Список запчастей:\n\n"
-    for part in parts:
-        part_id, name, quantity = part
-        text += f"🔹 ID {part_id}: {name} - {quantity} шт.\n"
-
-    bot.send_message(message.chat.id, text)
-
-# 🔹 Запуск бота
-bot.polling(none_stop=True)
+    text = "📋 Список запчастей

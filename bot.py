@@ -1,10 +1,14 @@
+import os
 import sqlite3
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils import executor
-import os
 
-TOKEN = os.getenv("BOT_TOKEN")  # Загружаем токен из переменных окружения
+# Загружаем токен из переменных окружения
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise ValueError("❌ Переменная окружения BOT_TOKEN не задана! Укажите её в Railway.")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
@@ -13,7 +17,7 @@ dp = Dispatcher(bot)
 conn = sqlite3.connect("parts.db")
 cursor = conn.cursor()
 
-# Создаем таблицу (если её нет)
+# Создаем таблицу, если её нет
 cursor.execute("""
     CREATE TABLE IF NOT EXISTS parts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

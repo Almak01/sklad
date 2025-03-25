@@ -116,8 +116,23 @@ async def list_parts(message: Message):
 # 📌 Выдача запчасти (запуск FSM)
 @dp.message(F.text == "🔻 Выдача запчасти")
 async def issue_part_start(message: Message, state: FSMContext):
-    await message.answer("Введите номер запчасти для выдачи:")
-    await state.set_state(IssuePart.number)
+    conn = sqlite3.connect("parts.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, quantity FROM parts WHERE quantity > 0")
+    parts = cursor.fetchall()
+    conn.close()
+
+    if not parts:
+        await message.answer("❌ Нет доступных запчастей для выдачи.")
+    else:
+        text = "🔻 Выдача запчасти:\n"
+        for part in parts:
+            text += f"{part[0]}. {part[1]} — {part[2]} шт.\n"
+        await message.answer(text, reply_markup=main_menu)
+        await message.answer("Введите номер запчасти для выдачи:")
+
+        # Установим состояние для номера запчасти
+        await state.set_state(IssuePart.number)
 
 @dp.message(IssuePart.number)
 async def issue_part_number(message: Message, state: FSMContext):

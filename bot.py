@@ -10,6 +10,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ Переменная окружения BOT_TOKEN не задана! Укажите её в Railway.")
 
+print(f"🔍 BOT_TOKEN = {TOKEN}")
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 

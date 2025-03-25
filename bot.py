@@ -5,11 +5,13 @@ import logging
 import pandas as pd
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command, Text
+from aiogram.filters import Command
+from aiogram import F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message
 
-# Настройка логирования (чтобы видеть ошибки)
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота (замени на свой)
@@ -19,7 +21,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Подключение к базе данных (если нет — создаем)
+# Подключение к базе данных
 conn = sqlite3.connect("parts.db")
 cursor = conn.cursor()
 cursor.execute("""
@@ -64,23 +66,23 @@ main_menu = ReplyKeyboardMarkup(
 
 # 📌 Команда /start
 @dp.message(Command("start"))
-async def start(message: types.Message):
+async def start(message: Message):
     await message.answer("🔧 Добро пожаловать! Выберите действие:", reply_markup=main_menu)
 
 # 📌 Добавление запчасти (запуск FSM)
-@dp.message(Text("📦 Добавить запчасть"))
-async def add_part_start(message: types.Message, state: FSMContext):
+@dp.message(F.text == "📦 Добавить запчасть")
+async def add_part_start(message: Message, state: FSMContext):
     await message.answer("Введите название запчасти:")
     await state.set_state(AddPart.name)
 
 @dp.message(AddPart.name)
-async def add_part_name(message: types.Message, state: FSMContext):
+async def add_part_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
     await message.answer("Введите количество запчастей:")
     await state.set_state(AddPart.quantity)
 
 @dp.message(AddPart.quantity)
-async def add_part_quantity(message: types.Message, state: FSMContext):
+async def add_part_quantity(message: Message, state: FSMContext):
     data = await state.get_data()
     part_name = data["name"]
     quantity = int(message.text)
@@ -95,8 +97,8 @@ async def add_part_quantity(message: types.Message, state: FSMContext):
     await state.clear()
 
 # 📌 Просмотр списка запчастей
-@dp.message(Text("📋 Список запчастей"))
-async def list_parts(message: types.Message):
+@dp.message(F.text == "📋 Список запчастей")
+async def list_parts(message: Message):
     conn = sqlite3.connect("parts.db")
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, quantity FROM parts")
@@ -112,13 +114,13 @@ async def list_parts(message: types.Message):
         await message.answer(text, reply_markup=main_menu)
 
 # 📌 Выдача запчасти (запуск FSM)
-@dp.message(Text("🔻 Выдача запчасти"))
-async def issue_part_start(message: types.Message, state: FSMContext):
+@dp.message(F.text == "🔻 Выдача запчасти")
+async def issue_part_start(message: Message, state: FSMContext):
     await message.answer("Введите номер запчасти для выдачи:")
     await state.set_state(IssuePart.number)
 
 @dp.message(IssuePart.number)
-async def issue_part_number(message: types.Message, state: FSMContext):
+async def issue_part_number(message: Message, state: FSMContext):
     part_id = int(message.text)
 
     conn = sqlite3.connect("parts.db")
@@ -136,7 +138,7 @@ async def issue_part_number(message: types.Message, state: FSMContext):
         await state.clear()
 
 @dp.message(IssuePart.quantity)
-async def issue_part_quantity(message: types.Message, state: FSMContext):
+async def issue_part_quantity(message: Message, state: FSMContext):
     data = await state.get_data()
     quantity = int(message.text)
 
@@ -149,7 +151,7 @@ async def issue_part_quantity(message: types.Message, state: FSMContext):
     await state.set_state(IssuePart.issued_to)
 
 @dp.message(IssuePart.issued_to)
-async def issue_part_to(message: types.Message, state: FSMContext):
+async def issue_part_to(message: Message, state: FSMContext):
     data = await state.get_data()
     issued_to = message.text
 
@@ -165,8 +167,8 @@ async def issue_part_to(message: types.Message, state: FSMContext):
     await state.clear()
 
 # 📌 Отчет в Excel
-@dp.message(Text("📊 Отчет"))
-async def generate_report(message: types.Message):
+@dp.message(F.text == "📊 Отчет")
+async def generate_report(message: Message):
     conn = sqlite3.connect("parts.db")
     df = pd.read_sql_query("SELECT part_name, quantity, issued_to, date FROM issued_parts WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now')", conn)
     conn.close()

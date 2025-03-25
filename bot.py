@@ -1,206 +1,200 @@
-import os
-import telebot
-from telebot import types
 import sqlite3
+import os
 import logging
+import pandas as pd
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils import executor
+from datetime import datetime
 
-# Настройка логирования
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# Устанавливаем логирование
+logging.basicConfig(level=logging.INFO)
 
+# Токен бота (замени на свой)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-if not BOT_TOKEN:
-    raise ValueError("❌ Переменная окружения BOT_TOKEN не задана!")
+# Инициализация бота и диспетчера
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(bot)
 
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# 🔹 Подключение к базе данных SQLite
-conn = sqlite3.connect("parts.db", check_same_thread=False)
+# Создаем базу данных
+conn = sqlite3.connect("parts.db")
 cursor = conn.cursor()
 
-# 🔹 Создаем таблицу, если её нет
 cursor.execute("""
-    CREATE TABLE IF NOT EXISTS parts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        quantity INTEGER NOT NULL
-    )
+CREATE TABLE IF NOT EXISTS parts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    quantity INTEGER NOT NULL
+)
 """)
+
 cursor.execute("""
-    CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        part_id INTEGER NOT NULL,
-        quantity INTEGER NOT NULL,
-        taken_by TEXT NOT NULL,
-        transaction_type TEXT NOT NULL,  -- "add" или "issue"
-        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (part_id) REFERENCES parts(id)
-    )
+CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    part_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    taken_by TEXT NOT NULL,
+    transaction_type TEXT NOT NULL,  -- "add" или "issue"
+    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (part_id) REFERENCES parts(id)
+)
 """)
 conn.commit()
+conn.close()
 
-# 🔹 Главное меню с кнопками
-@bot.message_handler(commands=['start'])
-def start(message):
-    logging.debug("Бот запущен. Отправлено главное меню.")
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    add_button = types.KeyboardButton("➕ Добавить запчасть")
-    list_button = types.KeyboardButton("📦 Список запчастей")
-    issue_button = types.KeyboardButton("🛠 Выдача запчасти")
-    report_button = types.KeyboardButton("📊 Отчет")
-    markup.add(add_button, list_button, issue_button, report_button)
+# 📌 Создаем клавиатуру (не скрывается после нажатия)
+main_menu = ReplyKeyboardMarkup(
+    resize_keyboard=True,
+    one_time_keyboard=False,
+    is_persistent=True
+)
 
-    bot.send_message(message.chat.id, "Привет! Это бот склада запчастей. \n"
-                                      "Выберите одну из опций ниже:", reply_markup=markup)
+main_menu.add(
+    KeyboardButton("📦 Добавить запчасть"),
+    KeyboardButton("📋 Список запчастей"),
+    KeyboardButton("🔻 Выдача запчасти"),
+    KeyboardButton("📊 Отчет")
+)
 
-# 🔹 Обработка нажатия на кнопку "Список запчастей"
-@bot.message_handler(func=lambda message: message.text == "📦 Список запчастей")
-def list_parts(message):
+# 📌 Обработчик команды /start
+@dp.message_handler(commands=["start"])
+async def start(message: types.Message):
+    await message.answer("🔧 Добро пожаловать! Выберите действие:", reply_markup=main_menu)
+
+# 📌 Добавление запчасти
+@dp.message_handler(lambda message: message.text == "📦 Добавить запчасть")
+async def add_part(message: types.Message):
+    await message.answer("Введите название запчасти:")
+    dp.register_message_handler(get_part_name, state="add_part_name")
+
+async def get_part_name(message: types.Message):
+    part_name = message.text
+    await message.answer("Введите количество:")
+    dp.register_message_handler(lambda msg: save_part(msg, part_name), state="add_part_quantity")
+
+async def save_part(message: types.Message, part_name):
     try:
-        logging.debug("Запрос на получение списка запчастей")
-        
-        cursor.execute("SELECT id, name, quantity FROM parts")
-        parts = cursor.fetchall()
-
-        if not parts:
-            logging.debug("Склад пуст.")
-            bot.send_message(message.chat.id, "📭 Склад пуст.")
-            return
-
-        text = "📋 Список запчастей:\n\n"  # Завершена строка
-        for part in parts:
-            part_id, name, quantity = part
-            text += f"🔹 ID {part_id}: {name} - {quantity} шт.\n"
-
-        logging.debug("Отправка списка запчастей")
-        bot.send_message(message.chat.id, text)
-
-    except Exception as e:
-        logging.error(f"Ошибка при получении списка запчастей: {e}")
-        bot.send_message(message.chat.id, "⚠ Ошибка при получении списка запчастей.")
-
-# 🔹 Обработка нажатия на кнопку "Добавить запчасть"
-@bot.message_handler(func=lambda message: message.text == "➕ Добавить запчасть")
-def add_part(message):
-    try:
-        logging.debug("Запрос на добавление запчасти.")
-        bot.send_message(message.chat.id, "Введите название запчасти:")
-        bot.register_next_step_handler(message, process_name)
-    
-    except Exception as e:
-        logging.error(f"Ошибка при обработке запроса на добавление запчасти: {e}")
-        bot.send_message(message.chat.id, "⚠ Ошибка при добавлении запчасти.")
-
-# 🔹 Обработка ввода названия запчасти
-def process_name(message):
-    try:
-        name = message.text
-        logging.debug(f"Добавление запчасти с названием: {name}")
-        
-        msg = bot.send_message(message.chat.id, "Введите количество:")
-        bot.register_next_step_handler(msg, process_quantity, name)
-
-    except Exception as e:
-        logging.error(f"Ошибка при обработке названия запчасти: {e}")
-        bot.send_message(message.chat.id, "⚠ Ошибка при добавлении запчасти.")
-
-# 🔹 Обработка ввода количества запчасти
-def process_quantity(message, name):
-    try:
-        quantity = int(message.text)  # Преобразование введенного значения в целое число
-        logging.debug(f"Количество для запчасти {name}: {quantity}")
-        
-        cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (name, quantity))
+        quantity = int(message.text)
+        conn = sqlite3.connect("parts.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (part_name, quantity))
         conn.commit()
-
-        bot.send_message(message.chat.id, f"✅ Запчасть '{name}' добавлена с количеством {quantity}.")
-
+        conn.close()
+        await message.answer(f"✅ Добавлена запчасть: {part_name} (кол-во: {quantity})", reply_markup=main_menu)
     except ValueError:
-        bot.send_message(message.chat.id, "❌ Пожалуйста, введите корректное количество (целое число).")
-    except Exception as e:
-        logging.error(f"Ошибка при добавлении запчасти: {e}")
-        bot.send_message(message.chat.id, "⚠ Ошибка при добавлении запчасти.")
+        await message.answer("❌ Введите корректное число.")
 
-# 🔹 Обработка нажатия на кнопку "Выдача запчасти"
-@bot.message_handler(func=lambda message: message.text == "🛠 Выдача запчасти")
-def issue_part(message):
-    try:
-        logging.debug("Запрос на выдачу запчасти.")
-        
-        cursor.execute("SELECT id, name, quantity FROM parts")
-        parts = cursor.fetchall()
+# 📌 Вывод списка запчастей
+@dp.message_handler(lambda message: message.text == "📋 Список запчастей")
+async def list_parts(message: types.Message):
+    conn = sqlite3.connect("parts.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, quantity FROM parts")
+    parts = cursor.fetchall()
+    conn.close()
 
-        if not parts:
-            logging.debug("Склад пуст.")
-            bot.send_message(message.chat.id, "📭 Склад пуст.")
-            return
-
-        text = "📋 Список запчастей для выдачи:\n\n"
+    if not parts:
+        await message.answer("📭 Список запчастей пуст.")
+    else:
+        text = "📋 Список запчастей:\n"
         for part in parts:
-            part_id, name, quantity = part
-            if quantity > 0:
-                text += f"🔹 ID {part_id}: {name} - {quantity} шт.\n"
+            text += f"{part[0]}. {part[1]} — {part[2]} шт.\n"
+        await message.answer(text, reply_markup=main_menu)
 
-        logging.debug("Отправка списка запчастей для выдачи.")
-        bot.send_message(message.chat.id, text)
-        bot.send_message(message.chat.id, "Введите ID запчасти для выдачи:")
+# 📌 Выдача запчасти
+@dp.message_handler(lambda message: message.text == "🔻 Выдача запчасти")
+async def issue_part(message: types.Message):
+    conn = sqlite3.connect("parts.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, quantity FROM parts WHERE quantity > 0")
+    parts = cursor.fetchall()
+    conn.close()
 
-        bot.register_next_step_handler(message, process_issue_part)
-    
-    except Exception as e:
-        logging.error(f"Ошибка при запросе на выдачу запчасти: {e}")
-        bot.send_message(message.chat.id, "⚠ Ошибка при выдаче запчасти.")
+    if not parts:
+        await message.answer("📭 Нет доступных запчастей.")
+        return
 
-# 🔹 Обработка запроса на выдачу запчасти
-def process_issue_part(message):
+    text = "📋 Выберите номер запчасти для выдачи:\n"
+    for part in parts:
+        text += f"{part[0]}. {part[1]} — {part[2]} шт.\n"
+
+    await message.answer(text)
+    dp.register_message_handler(get_issue_part, state="issue_part_id")
+
+async def get_issue_part(message: types.Message):
     try:
         part_id = int(message.text)
-        logging.debug(f"Выдача запчасти с ID: {part_id}")
-        
-        cursor.execute("SELECT id, name, quantity FROM parts WHERE id = ?", (part_id,))
-        part = cursor.fetchone()
-
-        if part:
-            part_id, name, quantity = part
-            if quantity > 0:
-                bot.send_message(message.chat.id, f"Запчасть '{name}' будет выдана. Введите ФИО получателя:")
-                bot.register_next_step_handler(message, process_taken_by, part_id)
-            else:
-                bot.send_message(message.chat.id, "⚠ Запчасть закончилась на складе.")
-        else:
-            bot.send_message(message.chat.id, "❌ Запчасть с таким ID не найдена.")
-    
+        await message.answer("Введите количество для выдачи:")
+        dp.register_message_handler(lambda msg: get_issue_quantity(msg, part_id), state="issue_quantity")
     except ValueError:
-        bot.send_message(message.chat.id, "❌ Пожалуйста, введите корректный ID запчасти.")
-    except Exception as e:
-        logging.error(f"Ошибка при обработке запроса на выдачу запчасти: {e}")
-        bot.send_message(message.chat.id, "⚠ Ошибка при выдаче запчасти.")
+        await message.answer("❌ Введите корректный номер запчасти.")
 
-# 🔹 Обработка ввода ФИО получателя
-def process_taken_by(message, part_id):
+async def get_issue_quantity(message: types.Message, part_id):
     try:
-        taken_by = message.text
-        logging.debug(f"Запчасть выдана {taken_by}")
-        
-        cursor.execute("SELECT name, quantity FROM parts WHERE id = ?", (part_id,))
-        part = cursor.fetchone()
+        quantity = int(message.text)
+        await message.answer("Введите ФИО получателя:")
+        dp.register_message_handler(lambda msg: confirm_issue(msg, part_id, quantity), state="issue_person")
+    except ValueError:
+        await message.answer("❌ Введите корректное число.")
 
-        if part:
-            name, quantity = part
-            cursor.execute("UPDATE parts SET quantity = quantity - 1 WHERE id = ?", (part_id,))
-            cursor.execute("INSERT INTO transactions (part_id, quantity, taken_by, transaction_type) VALUES (?, ?, ?, 'issue')", 
-                           (part_id, 1, taken_by))
-            conn.commit()
+async def confirm_issue(message: types.Message, part_id, quantity):
+    taken_by = message.text
+    conn = sqlite3.connect("parts.db")
+    cursor = conn.cursor()
 
-            bot.send_message(message.chat.id, f"✅ Запчасть '{name}' выдана {taken_by}.")
-        else:
-            bot.send_message(message.chat.id, "❌ Запчасть с таким ID не найдена.")
-    
-    except Exception as e:
-        logging.error(f"Ошибка при выдаче запчасти: {e}")
-        bot.send_message(message.chat.id, "⚠ Ошибка при выдаче запчасти.")
+    # Проверяем наличие запчасти
+    cursor.execute("SELECT name, quantity FROM parts WHERE id = ?", (part_id,))
+    part = cursor.fetchone()
+
+    if not part or part[1] < quantity:
+        await message.answer("❌ Недостаточно запчастей на складе.")
+        conn.close()
+        return
+
+    # Обновляем количество
+    new_quantity = part[1] - quantity
+    cursor.execute("UPDATE parts SET quantity = ? WHERE id = ?", (new_quantity, part_id))
+
+    # Записываем транзакцию
+    cursor.execute("INSERT INTO transactions (part_id, quantity, taken_by, transaction_type) VALUES (?, ?, ?, 'issue')",
+                   (part_id, quantity, taken_by))
+
+    conn.commit()
+    conn.close()
+
+    await message.answer(f"✅ Выдано {quantity} шт. {part[0]} получателю: {taken_by}", reply_markup=main_menu)
+
+# 📌 Отчет в Excel
+@dp.message_handler(lambda message: message.text == "📊 Отчет")
+async def generate_report(message: types.Message):
+    conn = sqlite3.connect("parts.db")
+    cursor = conn.cursor()
+
+    # Получаем данные за текущий месяц
+    current_month = datetime.now().strftime("%Y-%m")
+    cursor.execute("""
+        SELECT p.name, t.quantity, t.taken_by, t.date
+        FROM transactions t
+        JOIN parts p ON t.part_id = p.id
+        WHERE strftime('%Y-%m', t.date) = ?
+    """, (current_month,))
+    transactions = cursor.fetchall()
+    conn.close()
+
+    if not transactions:
+        await message.answer("📭 За этот месяц выдач не было.")
+        return
+
+    # Создаем DataFrame и сохраняем в Excel
+    df = pd.DataFrame(transactions, columns=["Название", "Количество", "ФИО", "Дата"])
+    file_path = "report.xlsx"
+    df.to_excel(file_path, index=False)
+
+    # Отправляем отчет
+    with open(file_path, "rb") as report:
+        await bot.send_document(message.chat.id, report, caption="📊 Отчет за текущий месяц")
 
 # Запуск бота
 if __name__ == "__main__":
-    logging.debug("Бот готов к запуску.")
-    bot.polling(none_stop=True)
+    executor.start_polling(dp, skip_updates=True)

@@ -1,5 +1,6 @@
 import os
 import telebot
+from telebot import types
 import sqlite3
 
 # 🔹 Загружаем токен из переменной окружения
@@ -8,7 +9,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("❌ Переменная окружения BOT_TOKEN не задана!")
 
-print(f"🔍 BOT_TOKEN = {BOT_TOKEN}")
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # 🔹 Подключение к базе данных SQLite
@@ -25,32 +25,40 @@ cursor.execute("""
 """)
 conn.commit()
 
-# 🔹 Команда /start
+# 🔹 Главное меню с кнопками
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "Привет! Это бот склада запчастей. \n"
-                                      "Вы можете добавлять и просматривать запчасти.\n\n"
-                                      "📌 Команды:\n"
-                                      "➕ /add [название] [количество] — добавить запчасть\n"
-                                      "📦 /list — показать все запчасти")
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    add_button = types.KeyboardButton("➕ Добавить запчасть")
+    list_button = types.KeyboardButton("📦 Список запчастей")
+    markup.add(add_button, list_button)
 
-# 🔹 Добавление запчасти: /add Фильтр 5
-@bot.message_handler(commands=['add'])
+    bot.send_message(message.chat.id, "Привет! Это бот склада запчастей. \n"
+                                      "Выберите одну из опций ниже:", reply_markup=markup)
+
+# 🔹 Обработка нажатия на кнопку "Добавить запчасть"
+@bot.message_handler(func=lambda message: message.text == "➕ Добавить запчасть")
 def add_part(message):
+    msg = bot.send_message(message.chat.id, "Введите название запчасти и количество через пробел (например: Фильтр 5):")
+    bot.register_next_step_handler(msg, process_add_part)
+
+# 🔹 Обработка текста для добавления запчасти
+def process_add_part(message):
     try:
-        _, name, quantity = message.text.split(" ", 2)
+        name, quantity = message.text.split(" ", 1)
         quantity = int(quantity)
 
         cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (name, quantity))
         conn.commit()
 
         bot.send_message(message.chat.id, f"✅ Добавлена запчасть: {name}, {quantity} шт.")
-    except:
-        bot.send_message(message.chat.id, "⚠ Ошибка! Используйте формат:\n"
-                                          "`/add [название] [количество]`", parse_mode="Markdown")
+    except ValueError:
+        bot.send_message(message.chat.id, "⚠ Ошибка! Используйте формат:\n`[название] [количество]`")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"⚠ Ошибка: {e}")
 
-# 🔹 Вывод списка запчастей
-@bot.message_handler(commands=['list'])
+# 🔹 Обработка нажатия на кнопку "Список запчастей"
+@bot.message_handler(func=lambda message: message.text == "📦 Список запчастей")
 def list_parts(message):
     cursor.execute("SELECT name, quantity FROM parts")
     parts = cursor.fetchall()

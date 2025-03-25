@@ -196,5 +196,11 @@ async def generate_report(message: types.Message):
         await bot.send_document(message.chat.id, report, caption="📊 Отчет за текущий месяц")
 
 # Запуск бота
+import asyncio
+
+async def main():
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
+

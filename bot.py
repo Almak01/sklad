@@ -1,24 +1,21 @@
 import os
+import telebot
 import sqlite3
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils import executor
 
-# Загружаем токен из переменных окружения
-TOKEN = os.getenv("BOT_TOKEN")
+# 🔹 Загружаем токен из переменной окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-if not TOKEN:
-    raise ValueError("❌ Переменная окружения BOT_TOKEN не задана! Укажите её в Railway.")
+if not BOT_TOKEN:
+    raise ValueError("❌ Переменная окружения BOT_TOKEN не задана!")
 
-print(f"🔍 BOT_TOKEN = {TOKEN}")
-bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+print(f"🔍 BOT_TOKEN = {BOT_TOKEN}")
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# Подключаем базу данных
-conn = sqlite3.connect("parts.db")
+# 🔹 Подключение к базе данных SQLite
+conn = sqlite3.connect("parts.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# Создаем таблицу, если её нет
+# 🔹 Создаем таблицу, если её нет
 cursor.execute("""
     CREATE TABLE IF NOT EXISTS parts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,49 +25,45 @@ cursor.execute("""
 """)
 conn.commit()
 
-# Кнопки меню
-kb = ReplyKeyboardMarkup(resize_keyboard=True)
-kb.add(KeyboardButton("➕ Добавить запчасть"), KeyboardButton("📦 Список запчастей"))
+# 🔹 Команда /start
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.send_message(message.chat.id, "Привет! Это бот склада запчастей. \n"
+                                      "Вы можете добавлять и просматривать запчасти.\n\n"
+                                      "📌 Команды:\n"
+                                      "➕ /add [название] [количество] — добавить запчасть\n"
+                                      "📦 /list — показать все запчасти")
 
-# Команда /start
-@dp.message_handler(commands=["start"])
-async def start(message: types.Message):
-    await message.answer("Добро пожаловать в систему склада запчастей!", reply_markup=kb)
-
-# Добавление запчасти
-@dp.message_handler(lambda message: message.text == "➕ Добавить запчасть")
-async def add_part(message: types.Message):
-    await message.answer("Введите название запчасти и количество (пример: Фильтр 5)")
-
-@dp.message_handler()
-async def process_part(message: types.Message):
+# 🔹 Добавление запчасти: /add Фильтр 5
+@bot.message_handler(commands=['add'])
+def add_part(message):
     try:
-        name, quantity = message.text.rsplit(" ", 1)
+        _, name, quantity = message.text.split(" ", 2)
         quantity = int(quantity)
 
         cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (name, quantity))
         conn.commit()
 
-        await message.answer(f"✅ Добавлена запчасть: {name}, {quantity} шт.")
+        bot.send_message(message.chat.id, f"✅ Добавлена запчасть: {name}, {quantity} шт.")
     except:
-        await message.answer("⚠ Ошибка! Введите данные в формате: `Название Количество`")
+        bot.send_message(message.chat.id, "⚠ Ошибка! Используйте формат:\n"
+                                          "`/add [название] [количество]`", parse_mode="Markdown")
 
-# Вывод списка запчастей
-@dp.message_handler(lambda message: message.text == "📦 Список запчастей")
-async def list_parts(message: types.Message):
+# 🔹 Вывод списка запчастей
+@bot.message_handler(commands=['list'])
+def list_parts(message):
     cursor.execute("SELECT name, quantity FROM parts")
     parts = cursor.fetchall()
 
     if not parts:
-        await message.answer("Склад пуст.")
+        bot.send_message(message.chat.id, "📭 Склад пуст.")
         return
 
     text = "📋 Список запчастей:\n\n"
     for name, quantity in parts:
         text += f"🔹 {name}: {quantity} шт.\n"
 
-    await message.answer(text)
+    bot.send_message(message.chat.id, text)
 
-# Запуск бота
-if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+# 🔹 Запуск бота
+bot.polling(none_stop=True)

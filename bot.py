@@ -75,8 +75,8 @@ def process_quantity(message, name):
 # 🔹 Обработка нажатия на кнопку "Выдача запчасти"
 @bot.message_handler(func=lambda message: message.text == "🛠 Выдача запчасти")
 def issue_part(message):
-    # Показываем список оставшихся запчастей
-    cursor.execute("SELECT name, quantity FROM parts")
+    # Показываем список оставшихся запчастей с номерами
+    cursor.execute("SELECT id, name, quantity FROM parts")
     parts = cursor.fetchall()
 
     if not parts:
@@ -84,46 +84,52 @@ def issue_part(message):
         return
 
     text = "📋 Список запчастей:\n\n"
-    for name, quantity in parts:
-        text += f"🔹 {name}: {quantity} шт.\n"
+    for part in parts:
+        part_id, name, quantity = part
+        text += f"🔹 ID {part_id}: {name} - {quantity} шт.\n"
 
-    # Выводим список и спрашиваем, какую запчасть выдать
-    msg = bot.send_message(message.chat.id, text + "\nВведите название запчасти для выдачи:")
-    bot.register_next_step_handler(msg, process_issue_name)
+    # Выводим список и спрашиваем, какой запчасти по номеру выдать
+    msg = bot.send_message(message.chat.id, text + "\nВведите номер запчасти для выдачи (ID):")
+    bot.register_next_step_handler(msg, process_issue_id)
 
-# 🔹 Обработка ввода названия запчасти для выдачи
-def process_issue_name(message):
-    part_name = message.text
-    msg = bot.send_message(message.chat.id, "Введите количество для выдачи:")
-    bot.register_next_step_handler(msg, process_issue_quantity, part_name)
-
-# 🔹 Обработка ввода количества запчасти для выдачи
-def process_issue_quantity(message, part_name):
+# 🔹 Обработка ввода ID запчасти для выдачи
+def process_issue_id(message):
     try:
-        quantity = int(message.text)
-        
+        part_id = int(message.text)
+
         # Проверяем, есть ли такая запчасть на складе
-        cursor.execute("SELECT id, quantity FROM parts WHERE name = ?", (part_name,))
+        cursor.execute("SELECT id, name, quantity FROM parts WHERE id = ?", (part_id,))
         part = cursor.fetchone()
 
         if not part:
-            bot.send_message(message.chat.id, "❌ Запчасть не найдена на складе.")
+            bot.send_message(message.chat.id, "❌ Запчасть с таким ID не найдена на складе.")
             return
 
-        part_id, current_quantity = part
+        part_name, current_quantity = part[1], part[2]
+        msg = bot.send_message(message.chat.id, f"Вы выбрали запчасть {part_name} ({current_quantity} шт.).\nВведите количество для выдачи:")
+        bot.register_next_step_handler(msg, process_issue_quantity, part_id, part_name, current_quantity)
+
+    except ValueError:
+        bot.send_message(message.chat.id, "⚠ Ошибка! Введите корректный номер (целое число).")
+
+# 🔹 Обработка ввода количества запчасти для выдачи
+def process_issue_quantity(message, part_id, part_name, current_quantity):
+    try:
+        quantity = int(message.text)
+
         if current_quantity < quantity:
             bot.send_message(message.chat.id, "❌ Недостаточно запчастей на складе.")
             return
 
         # Запрашиваем ФИО, кто забрал запчасть
         msg = bot.send_message(message.chat.id, "Введите ФИО человека, который забрал запчасть:")
-        bot.register_next_step_handler(msg, process_issue_taken_by, part_id, quantity)
+        bot.register_next_step_handler(msg, process_issue_taken_by, part_id, quantity, part_name)
 
     except ValueError:
         bot.send_message(message.chat.id, "⚠ Ошибка! Введите корректное количество (целое число).")
 
 # 🔹 Обработка ввода ФИО и выдача запчасти
-def process_issue_taken_by(message, part_id, quantity):
+def process_issue_taken_by(message, part_id, quantity, part_name):
     taken_by = message.text
 
     # Обновляем количество запчасти на складе

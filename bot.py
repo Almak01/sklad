@@ -39,23 +39,26 @@ def start(message):
 # 🔹 Обработка нажатия на кнопку "Добавить запчасть"
 @bot.message_handler(func=lambda message: message.text == "➕ Добавить запчасть")
 def add_part(message):
-    msg = bot.send_message(message.chat.id, "Введите название запчасти и количество через пробел (например: Фильтр 5):")
-    bot.register_next_step_handler(msg, process_add_part)
+    msg = bot.send_message(message.chat.id, "Введите название запчасти:")
+    bot.register_next_step_handler(msg, process_name)
 
-# 🔹 Обработка текста для добавления запчасти
-def process_add_part(message):
+# 🔹 Обработка ввода названия запчасти
+def process_name(message):
+    name = message.text
+    msg = bot.send_message(message.chat.id, "Введите количество:")
+    bot.register_next_step_handler(msg, process_quantity, name)
+
+# 🔹 Обработка ввода количества запчасти
+def process_quantity(message, name):
     try:
-        name, quantity = message.text.split(" ", 1)
-        quantity = int(quantity)
+        quantity = int(message.text)
 
         cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (name, quantity))
         conn.commit()
 
         bot.send_message(message.chat.id, f"✅ Добавлена запчасть: {name}, {quantity} шт.")
     except ValueError:
-        bot.send_message(message.chat.id, "⚠ Ошибка! Используйте формат:\n`[название] [количество]`")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"⚠ Ошибка: {e}")
+        bot.send_message(message.chat.id, "⚠ Ошибка! Введите корректное количество (целое число).")
 
 # 🔹 Обработка нажатия на кнопку "Список запчастей"
 @bot.message_handler(func=lambda message: message.text == "📦 Список запчастей")

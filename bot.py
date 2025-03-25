@@ -198,19 +198,29 @@ def process_issue_taken_by(message, part_id, quantity, part_name):
 # 🔹 Обработка нажатия на кнопку "Список запчастей"
 @bot.message_handler(func=lambda message: message.text == "📦 Список запчастей")
 def list_parts(message):
-    cursor.execute("SELECT id, name, quantity FROM parts")
-    parts = cursor.fetchall()
+    try:
+        logging.debug("Запрос на получение списка запчастей")
+        
+        cursor.execute("SELECT id, name, quantity FROM parts")
+        parts = cursor.fetchall()
 
-    if not parts:
-        bot.send_message(message.chat.id, "📭 Склад пуст.")
-        return
+        if not parts:
+            logging.debug("Склад пуст.")
+            bot.send_message(message.chat.id, "📭 Склад пуст.")
+            return
 
-    text = "📋 Список запчастей
-    for part in parts:
-        part_id, name, quantity = part
-        text += f"🔹 ID {part_id}: {name} - {quantity} шт.\n"
+        text = "📋 Список запчастей:\n\n"  # Завершена строка
+        for part in parts:
+            part_id, name, quantity = part
+            text += f"🔹 ID {part_id}: {name} - {quantity} шт.\n"
 
-    bot.send_message(message.chat.id, text)
+        logging.debug("Отправка списка запчастей")
+        bot.send_message(message.chat.id, text)
+
+    except Exception as e:
+        logging.error(f"Ошибка при получении списка запчастей: {e}")
+        bot.send_message(message.chat.id, "⚠ Ошибка при получении списка запчастей.")
+
 
 
 

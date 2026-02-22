@@ -1,205 +1,142 @@
-import asyncio
-import os
-import sqlite3
-import logging
-import pandas as pd
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
-from aiogram import F
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from datetime import datetime
+import telebot
+from telebot.types import BusinessMessagesDeleted
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
+BOT_TOKEN = "8480414614:AAEOuau7qDP1ttNOvbVDgXfzkQJvKDZmGF4"  # СЮДА_ВСТАВЬ_ТОКЕН_БОТА
+OWNER_ID = 682539696  # СЮДА_ВСТАВЬ_ТВОЙ_АЙДИ
 
-# Токен бота (замени на свой)
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# Подключение к боту
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+MESSAGES = {}
 
-# Подключение к базе данных
-conn = sqlite3.connect("parts.db")
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS parts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    quantity INTEGER NOT NULL
-)
-""")
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS issued_parts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    part_name TEXT NOT NULL,
-    quantity INTEGER NOT NULL,
-    issued_to TEXT NOT NULL,
-    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
-""")
-conn.commit()
-conn.close()
+def chat_name(chat):
+    return chat.title or f"{chat.first_name or ''} {chat.last_name or ''}".strip()
 
-# 📌 Состояния для FSM
-class AddPart(StatesGroup):
-    name = State()
-    quantity = State()
+def is_view_once(msg):
+    return bool(getattr(msg, "self_destruct_type", None) or getattr(msg, "has_media_spoiler", False))
 
-class IssuePart(StatesGroup):
-    number = State()
-    quantity = State()
-    issued_to = State()
+def base_record(msg):
+    return {
+        "from_user": msg.from_user.first_name,
+        "from_user_id": msg.from_user.id,
+        "type": msg.content_type,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+    }
 
-# 📌 Главное меню (кнопки)
-main_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="📦 Добавить запчасть")],
-        [KeyboardButton(text="📋 Список запчастей")],
-        [KeyboardButton(text="🔻 Выдача запчасти")],
-        [KeyboardButton(text="📊 Отчет")]
-    ],
-    resize_keyboard=True
-)
+def _photo(msg): return msg.photo[-1].file_id
+def _video(msg): return msg.video.file_id
+def _video_note(msg): return msg.video_note.file_id
+def _voice(msg): return msg.voice.file_id
+def _audio(msg): return msg.audio.file_id
+def _animation(msg): return msg.animation.file_id
+def _sticker(msg): return msg.sticker.file_id
+def _document(msg): return msg.document.file_id
 
-# 📌 Команда /start
-@dp.message(Command("start"))
-async def start(message: Message):
-    await message.answer("🔧 Добро пожаловать! Выберите действие:", reply_markup=main_menu)
+MEDIA_EXTRACTORS = {
+    "photo": _photo,
+    "video": _video,
+    "video_note": _video_note,
+    "voice": _voice,
+    "audio": _audio,
+    "animation": _animation,
+    "sticker": _sticker,
+    "document": _document,
+}
 
-# 📌 Добавление запчасти (запуск FSM)
-@dp.message(F.text == "📦 Добавить запчасть")
-async def add_part_start(message: Message, state: FSMContext):
-    await message.answer("Введите название запчасти:")
-    await state.set_state(AddPart.name)
+SEND_WITH_CAPTION = {
+    "photo": bot.send_photo,
+    "video": bot.send_video,
+    "audio": bot.send_audio,
+    "animation": bot.send_video,
+    "document": bot.send_document,
+}
 
-@dp.message(AddPart.name)
-async def add_part_name(message: Message, state: FSMContext):
-    await state.update_data(name=message.text)
-    await message.answer("Введите количество запчастей:")
-    await state.set_state(AddPart.quantity)
+@bot.business_message_handler(content_types=[
+    "text", "photo", "video", "video_note", "document",
+    "voice", "audio", "animation", "sticker", "location", "contact"
+])
+def on_business_message(msg):
+    key = (msg.chat.id, msg.message_id)
+    record = base_record(msg)
 
-@dp.message(AddPart.quantity)
-async def add_part_quantity(message: Message, state: FSMContext):
-    data = await state.get_data()
-    part_name = data["name"]
-    quantity = int(message.text)
-
-    conn = sqlite3.connect("parts.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO parts (name, quantity) VALUES (?, ?)", (part_name, quantity))
-    conn.commit()
-    conn.close()
-
-    await message.answer(f"✅ Запчасть '{part_name}' ({quantity} шт.) добавлена!", reply_markup=main_menu)
-    await state.clear()
-
-# 📌 Просмотр списка запчастей
-@dp.message(F.text == "📋 Список запчастей")
-async def list_parts(message: Message):
-    conn = sqlite3.connect("parts.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, quantity FROM parts")
-    parts = cursor.fetchall()
-    conn.close()
-
-    if not parts:
-        await message.answer("📭 Список запчастей пуст.")
-    else:
-        text = "📋 Список запчастей:\n"
-        for part in parts:
-            text += f"{part[0]}. {part[1]} — {part[2]} шт.\n"
-        await message.answer(text, reply_markup=main_menu)
-
-# 📌 Выдача запчасти (запуск FSM)
-@dp.message(F.text == "🔻 Выдача запчасти")
-async def issue_part_start(message: Message, state: FSMContext):
-    conn = sqlite3.connect("parts.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, quantity FROM parts WHERE quantity > 0")
-    parts = cursor.fetchall()
-    conn.close()
-
-    if not parts:
-        await message.answer("❌ Нет доступных запчастей для выдачи.")
-    else:
-        text = "🔻 Выдача запчасти:\n"
-        for part in parts:
-            text += f"{part[0]}. {part[1]} — {part[2]} шт.\n"
-        await message.answer(text, reply_markup=main_menu)
-        await message.answer("Введите номер запчасти для выдачи:")
-
-        # Установим состояние для номера запчасти
-        await state.set_state(IssuePart.number)
-
-@dp.message(IssuePart.number)
-async def issue_part_number(message: Message, state: FSMContext):
-    part_id = int(message.text)
-
-    conn = sqlite3.connect("parts.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, quantity FROM parts WHERE id=?", (part_id,))
-    part = cursor.fetchone()
-    conn.close()
-
-    if part:
-        await state.update_data(number=part_id, part_name=part[0], available=part[1])
-        await message.answer(f"Введите количество (в наличии {part[1]} шт.):")
-        await state.set_state(IssuePart.quantity)
-    else:
-        await message.answer("❌ Неверный номер запчасти. Попробуйте еще раз.", reply_markup=main_menu)
-        await state.clear()
-
-@dp.message(IssuePart.quantity)
-async def issue_part_quantity(message: Message, state: FSMContext):
-    data = await state.get_data()
-    quantity = int(message.text)
-
-    if quantity > data["available"]:
-        await message.answer("❌ Недостаточно запчастей на складе.")
+    if msg.content_type == "text":
+        record["content"] = msg.text
+        MESSAGES[key] = record
         return
 
-    await state.update_data(quantity=quantity)
-    await message.answer("Введите ФИО получателя:")
-    await state.set_state(IssuePart.issued_to)
-
-@dp.message(IssuePart.issued_to)
-async def issue_part_to(message: Message, state: FSMContext):
-    data = await state.get_data()
-    issued_to = message.text
-
-    conn = sqlite3.connect("parts.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE parts SET quantity = quantity - ? WHERE id=?", (data["quantity"], data["number"]))
-    cursor.execute("INSERT INTO issued_parts (part_name, quantity, issued_to) VALUES (?, ?, ?)", 
-                   (data["part_name"], data["quantity"], issued_to))
-    conn.commit()
-    conn.close()
-
-    await message.answer(f"✅ Выдано {data['quantity']} шт. {data['part_name']} — {issued_to}.", reply_markup=main_menu)
-    await state.clear()
-
-# 📌 Отчет в Excel
-@dp.message(F.text == "📊 Отчет")
-async def generate_report(message: Message):
-    conn = sqlite3.connect("parts.db")
-    df = pd.read_sql_query("SELECT part_name, quantity, issued_to, date FROM issued_parts WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now')", conn)
-    conn.close()
-
-    if df.empty:
-        await message.answer("📭 В этом месяце ничего не выдавалось.")
+    if msg.content_type == "location":
+        record["content"] = f"[location] lat={msg.location.latitude}, lon={msg.location.longitude}"
+        MESSAGES[key] = record
         return
 
-    filename = "Отчет_выдачи.xlsx"
-    df.to_excel(filename, index=False)
+    if msg.content_type == "contact":
+        record["content"] = f"[contact] {msg.contact.first_name} {msg.contact.last_name or ''}, tel={msg.contact.phone_number}"
+        MESSAGES[key] = record
+        return
 
-    await message.answer_document(types.FSInputFile(filename))
+    extractor = MEDIA_EXTRACTORS.get(msg.content_type)
+    if extractor:
+        record["file_id"] = extractor(msg)
+        MESSAGES[key] = record
+        if is_view_once(msg):
+            bot.send_message(OWNER_ID, "Одноразовое медиа сохранено")
 
-# 📌 Запуск бота (aiogram 3.x)
-async def main():
-    await dp.start_polling(bot)
+@bot.edited_business_message_handler(content_types=["text"])
+def on_edit(msg):
+    key = (msg.chat.id, msg.message_id)
+    old = MESSAGES.get(key)
+    MESSAGES[key] = {"type": "text", "content": msg.text}
+    if old:
+        bot.send_message(
+            OWNER_ID,
+            f"<b>Сообщение отредактировано</b>\n"
+            f"Чат: {chat_name(msg.chat)}\n\n"
+            f"<b>Было:</b>\n{old.get('content')}\n\n"
+            f"<b>Стало:</b>\n{msg.text}"
+        )
 
-if __name__ == "__main__":
-    asyncio.run(main())
+@bot.deleted_business_messages_handler()
+def on_delete(event: BusinessMessagesDeleted):
+    chat = event.chat
+
+    for msg_id in event.message_ids:
+        key = (chat.id, msg_id)
+        record = MESSAGES.pop(key, None)
+        if not record:
+            continue
+
+        msg_text = (
+            f"<b>Сообщение удалено</b>\n"
+            f"Чат: {chat_name(chat)}\n"
+            f"От: {record.get('from_user')}\n"
+            f"Тип: {record.get('type')}"
+        )
+
+        if record.get("type") == "text" and "content" in record:
+            msg_text += f"\n\n<b>Текст:</b> {record['content']}"
+
+        file_id = record.get("file_id")
+        msg_type = record.get("type")
+
+        if msg_type == "video_note" and file_id:
+            bot.send_video_note(OWNER_ID, file_id)
+            bot.send_message(OWNER_ID, msg_text)
+            continue
+
+        if msg_type == "sticker" and file_id:
+            bot.send_sticker(OWNER_ID, file_id)
+            bot.send_message(OWNER_ID, msg_text)
+            continue
+
+        if msg_type == "voice" and file_id:
+            bot.send_voice(OWNER_ID, file_id)
+            bot.send_message(OWNER_ID, msg_text)
+            continue
+
+        if file_id and msg_type in SEND_WITH_CAPTION:
+            SEND_WITH_CAPTION[msg_type](OWNER_ID, file_id, caption=msg_text)
+        else:
+            bot.send_message(OWNER_ID, msg_text)
+
+print("Бот запущен")
+bot.infinity_polling()
